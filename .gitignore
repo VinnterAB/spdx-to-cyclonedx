@@ -1,0 +1,22 @@
+# SPDX input directories
+*.spdx/
+*.spdx.tar.zst
+
+# Generated SBOM files
+*.json
+!package.json
+
+# Temporary files
+*.tmp
+/tmp/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
