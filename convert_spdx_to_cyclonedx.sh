@@ -19,12 +19,22 @@ set -e
 
 # Parse command line arguments
 INCLUDE_NATIVE=false
+INCLUDE_FILES=false
+INCLUDE_SOURCE=false
 POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --include-native)
             INCLUDE_NATIVE=true
+            shift
+            ;;
+        --include-files)
+            INCLUDE_FILES=true
+            shift
+            ;;
+        --include-source)
+            INCLUDE_SOURCE=true
             shift
             ;;
         -h|--help)
@@ -35,17 +45,23 @@ while [[ $# -gt 0 ]]; do
             echo "Options:"
             echo "  --include-native    Include native packages (build-time only)"
             echo "                      Default: native packages are excluded"
+            echo "  --include-files     Include file-type components"
+            echo "                      Default: file components are excluded (CVE scanning not applicable)"
+            echo "  --include-source    Include source components without version"
+            echo "                      Default: source components are excluded (cannot be scanned for CVEs)"
             echo "  -h, --help          Show this help message"
             echo ""
             echo "Arguments:"
-            echo "  spdx_directory      Directory containing SPDX JSON files"
-            echo "                      Default: ragnaros-image-core-imx6ull-rfgw4030-20251107091216.spdx"
+            echo "  spdx_directory      Directory containing SPDX JSON files (required)"
             echo "  output_file         Output CycloneDX JSON file"
             echo "                      Default: merged-sbom.json"
             echo ""
             echo "Examples:"
             echo "  $0 ./spdx_dir output.json"
             echo "  $0 --include-native ./spdx_dir output.json"
+            echo "  $0 --include-files ./spdx_dir output.json"
+            echo "  $0 --include-source ./spdx_dir output.json"
+            echo "  $0 --include-native --include-files --include-source ./spdx_dir output.json"
             exit 0
             ;;
         *)
@@ -59,7 +75,7 @@ done
 set -- "${POSITIONAL_ARGS[@]}"
 
 # Default values
-SPDX_DIR="${1:-ragnaros-image-core-imx6ull-rfgw4030-20251107091216.spdx}"
+SPDX_DIR="${1}"
 OUTPUT_FILE="${2:-merged-sbom.json}"
 TEMP_DIR=$(mktemp -d)
 
@@ -69,10 +85,22 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# Check if SPDX directory argument is provided
+if [ -z "$SPDX_DIR" ]; then
+    echo -e "${RED}Error: SPDX directory argument is required${NC}"
+    echo ""
+    echo "Usage: $0 [OPTIONS] <spdx_directory> [output_file]"
+    echo ""
+    echo "For more information, run: $0 --help"
+    exit 1
+fi
+
 echo -e "${GREEN}=== SPDX to CycloneDX Converter ===${NC}"
 echo "SPDX Directory: $SPDX_DIR"
 echo "Output File: $OUTPUT_FILE"
 echo "Include Native Packages: $INCLUDE_NATIVE"
+echo "Include File Components: $INCLUDE_FILES"
+echo "Include Source Components: $INCLUDE_SOURCE"
 echo "Temporary Directory: $TEMP_DIR"
 echo ""
 
@@ -319,6 +347,109 @@ if [ -f "$OUTPUT_FILE" ]; then
     echo -e "${GREEN}✓ Validation issues fixed${NC}"
 fi
 
+# Filter out file-type components if not included
+if [ -f "$OUTPUT_FILE" ] && [ "$INCLUDE_FILES" = false ]; then
+    echo -e "${YELLOW}Filtering file-type components...${NC}"
+    TEMP_FILE="${OUTPUT_FILE}.tmp"
+    
+    # Count file components before filtering
+    FILE_COUNT=$(jq '[.components[] | select(.type == "file")] | length' "$OUTPUT_FILE")
+    
+    if [ "$FILE_COUNT" -gt 0 ]; then
+        # Remove file-type components
+        jq '.components |= map(select(.type != "file"))' "$OUTPUT_FILE" > "$TEMP_FILE"
+        mv "$TEMP_FILE" "$OUTPUT_FILE"
+        echo -e "${GREEN}✓ Excluded $FILE_COUNT file-type components (use --include-files to include them)${NC}"
+    else
+        echo -e "${GREEN}✓ No file-type components to filter${NC}"
+    fi
+fi
+
+# Filter out source components without versions if not included
+if [ -f "$OUTPUT_FILE" ] && [ "$INCLUDE_SOURCE" = false ]; then
+    echo -e "${YELLOW}Filtering source components without versions...${NC}"
+    TEMP_FILE="${OUTPUT_FILE}.tmp"
+    
+    # Count source components before filtering
+    SOURCE_COUNT=$(jq '[.components[] | select(.version == null or .version == "")] | length' "$OUTPUT_FILE")
+    
+    if [ "$SOURCE_COUNT" -gt 0 ]; then
+        # Remove components without version (typically source archives)
+        jq '.components |= map(select(.version != null and .version != ""))' "$OUTPUT_FILE" > "$TEMP_FILE"
+        mv "$TEMP_FILE" "$OUTPUT_FILE"
+        echo -e "${GREEN}✓ Excluded $SOURCE_COUNT source components without version (use --include-source to include them)${NC}"
+    else
+        echo -e "${GREEN}✓ No source components without version to filter${NC}"
+    fi
+fi
+
+# Remove batch merge metadata components (artifacts from merge process)
+if [ -f "$OUTPUT_FILE" ]; then
+    echo -e "${YELLOW}Removing batch merge metadata components...${NC}"
+    TEMP_FILE="${OUTPUT_FILE}.tmp"
+    
+    # Count batch components
+    BATCH_COUNT=$(jq '[.components[] | select(.name | test("-batch-[0-9]+$"))] | length' "$OUTPUT_FILE")
+    
+    if [ "$BATCH_COUNT" -gt 0 ]; then
+        # Remove components with names ending in -batch-<number>
+        jq '.components |= map(select(.name | test("-batch-[0-9]+$") | not))' "$OUTPUT_FILE" > "$TEMP_FILE"
+        mv "$TEMP_FILE" "$OUTPUT_FILE"
+        echo -e "${GREEN}✓ Removed $BATCH_COUNT batch merge metadata components${NC}"
+    else
+        echo -e "${GREEN}✓ No batch metadata components to remove${NC}"
+    fi
+fi
+
+# Remove duplicate components (same name and version)
+if [ -f "$OUTPUT_FILE" ]; then
+    echo -e "${YELLOW}Removing duplicate components...${NC}"
+    TEMP_FILE="${OUTPUT_FILE}.tmp"
+    
+    # Count duplicates before deduplication
+    BEFORE_COUNT=$(jq '.components | length' "$OUTPUT_FILE")
+    
+    # Deduplicate by name@version, keeping the first occurrence
+    jq '.components |= (
+        reduce .[] as $item (
+            {seen: {}, result: []};
+            ($item.name + "@" + ($item.version // "null")) as $key |
+            if .seen[$key] then
+                .
+            else
+                .seen[$key] = true |
+                .result += [$item]
+            end
+        ) | .result
+    )' "$OUTPUT_FILE" > "$TEMP_FILE"
+    
+    mv "$TEMP_FILE" "$OUTPUT_FILE"
+    
+    AFTER_COUNT=$(jq '.components | length' "$OUTPUT_FILE")
+    DUPLICATE_COUNT=$((BEFORE_COUNT - AFTER_COUNT))
+    
+    if [ "$DUPLICATE_COUNT" -gt 0 ]; then
+        echo -e "${GREEN}✓ Removed $DUPLICATE_COUNT duplicate components${NC}"
+    else
+        echo -e "${GREEN}✓ No duplicate components found${NC}"
+    fi
+fi
+
+# Generate PURLs for components that don't have them
+if [ -f "$OUTPUT_FILE" ]; then
+    echo -e "${YELLOW}Generating Package URLs (PURLs) for vulnerability scanning...${NC}"
+    TEMP_FILE="${OUTPUT_FILE}.tmp"
+    
+    jq 'def generate_purl: if .purl != null and .purl != "" then . elif .name != null and .version != null and .version != "" then if (.name | test("^python3?-|^py-")) then .purl = "pkg:pypi/\(.name | sub("^python3?-"; "") | sub("^py-"; ""))@\(.version)" elif (.name | test("^node-|^npm-")) then .purl = "pkg:npm/\(.name | sub("^node-"; "") | sub("^npm-"; ""))@\(.version)" elif (.name | test("^perl-")) then .purl = "pkg:cpan/\(.name | sub("^perl-"; ""))@\(.version)" elif (.name | test("^ruby-|^gem-")) then .purl = "pkg:gem/\(.name | sub("^ruby-"; "") | sub("^gem-"; ""))@\(.version)" elif (.name | test("^go-|^golang-")) then .purl = "pkg:golang/\(.name | sub("^go-"; "") | sub("^golang-"; ""))@\(.version)" elif (.name | test("^rust-|^cargo-")) then .purl = "pkg:cargo/\(.name | sub("^rust-"; "") | sub("^cargo-"; ""))@\(.version)" elif (.name | test("^php-")) then .purl = "pkg:composer/\(.name | sub("^php-"; ""))@\(.version)" elif (.name | test("^maven-|^java-")) then .purl = "pkg:maven/\(.name | sub("^maven-"; "") | sub("^java-"; ""))@\(.version)" elif (.name | test("^kernel-[0-9]")) then .purl = "pkg:generic/linux@\(.version)" else .purl = "pkg:generic/\(.name)@\(.version)" end else . end; .components |= map(generate_purl)' "$OUTPUT_FILE" > "$TEMP_FILE"
+    
+    mv "$TEMP_FILE" "$OUTPUT_FILE"
+    
+    # Count how many PURLs were generated
+    PURL_COUNT=$(jq '[.components[] | select(.purl != null)] | length' "$OUTPUT_FILE")
+    TOTAL_COUNT=$(jq '.components | length' "$OUTPUT_FILE")
+    echo -e "${GREEN}✓ Generated PURLs for $PURL_COUNT/$TOTAL_COUNT components${NC}"
+fi
+
 # Show file size and component count
 if [ -f "$OUTPUT_FILE" ]; then
     FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1)
@@ -329,6 +460,12 @@ if [ -f "$OUTPUT_FILE" ]; then
     echo "Output File: $OUTPUT_FILE"
     echo "File Size: $FILE_SIZE"
     echo "Components: $COMPONENT_COUNT"
+    
+    # Show component type breakdown
+    TYPE_BREAKDOWN=$(jq -r '.components | group_by(.type) | map("\(.type // "unknown"): \(length)") | join(", ")' "$OUTPUT_FILE" 2>/dev/null)
+    if [ -n "$TYPE_BREAKDOWN" ]; then
+        echo "Component Types: $TYPE_BREAKDOWN"
+    fi
     
     # Validate the output
     echo ""

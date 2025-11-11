@@ -4,15 +4,16 @@ A bash script to convert SPDX JSON files to CycloneDX format and merge them into
 
 ## Features
 
-- ✅ **Batch Conversion**: Converts multiple SPDX JSON files to CycloneDX v1.6 format
-- ✅ **Smart Merging**: Automatically merges files in batches to handle large datasets (640+ files)
-- ✅ **Native Package Filtering**: Excludes build-time only packages by default
-- ✅ **Automatic Validation Fixes**: Cleans up invalid emails, URLs, and other schema violations
-- ✅ **DependencyTrack Ready**: Produces validated SBOMs compatible with DependencyTrack
-- ✅ **Comprehensive Error Handling**: Clear error messages and dependency checks
-- ✅ **Progress Tracking**: Real-time conversion and merge progress indicators
-
-## Requirements
+- **Batch Conversion**: Convert multiple SPDX JSON files to CycloneDX format
+- **Smart Merging**: Automatically merge hundreds of CycloneDX files into a single SBOM
+- **Automatic Cleanup**: Remove batch merge metadata and duplicate components
+- **Package Filtering**:
+  - Exclude native packages (build-time only) by default
+  - Filter file-type components (not CVE-scannable) by default
+  - Filter source components without version (not CVE-scannable) by default
+- **Validation Fixes**: Automatically fix common validation issues for DependencyTrack compatibility
+- **PURL Generation**: Automatically generate Package URLs for vulnerability scanning
+- **Progress Tracking**: Clear progress indicators during conversion and merging## Requirements
 
 - **cyclonedx-cli** - CycloneDX CLI tool
 - **jq** - JSON processor
@@ -48,12 +49,25 @@ brew install jq
 
 ### Options
 
-- `--include-native` - Include native packages (build-time only packages). Default: excluded
-- `-h, --help` - Show help message
+### Options
+
+- `--include-native`: Include native packages (build-time only packages)
+  - Default: native packages are excluded from the SBOM
+  - Native packages typically end with `-native` and are only used during the build process
+
+- `--include-files`: Include file-type components
+  - Default: file components are excluded
+  - File-type components cannot be scanned for CVEs and significantly increase SBOM size
+
+- `--include-source`: Include source components without version
+  - Default: source components without version are excluded
+  - Source components (typically named `*-source-*`) without version information cannot be scanned for CVEs
+
+- `-h, --help`: Display help message with usage information
 
 ### Examples
 
-**Convert with default settings (excludes native packages):**
+**Convert with default settings (excludes native packages and files):**
 ```bash
 ./convert_spdx_to_cyclonedx.sh ./my-spdx-files output.json
 ```
@@ -61,6 +75,21 @@ brew install jq
 **Include all packages (including native/build-time):**
 ```bash
 ./convert_spdx_to_cyclonedx.sh --include-native ./my-spdx-files output.json
+```
+
+**Include file-type components:**
+```bash
+./convert_spdx_to_cyclonedx.sh --include-files ./my-spdx-files output.json
+```
+
+**Include source components:**
+```bash
+./convert_spdx_to_cyclonedx.sh --include-source ./my-spdx-files output.json
+```
+
+**Include everything (native packages, files, and source components):**
+```bash
+./convert_spdx_to_cyclonedx.sh --include-native --include-files --include-source ./my-spdx-files output.json
 ```
 
 **Use default directory and output file:**
@@ -82,7 +111,7 @@ The script produces a CycloneDX v1.6 JSON SBOM with:
 
 ```
 === SPDX to CycloneDX Converter ===
-SPDX Directory: ./ragnaros-image-core-imx6ull-rfgw4030-20251107091216.spdx
+SPDX Directory: ./yocto-image-core-spdx
 Output File: output.json
 Include Native Packages: false
 
@@ -120,7 +149,9 @@ Validating SBOM...
 Done!
 ```
 
-## Native Package Filtering
+## Component Filtering
+
+### Native Package Filtering
 
 By default, the script excludes "native" packages - these are build-time dependencies that run on the build machine but are not installed on the target system. This is typically the desired behavior for runtime SBOMs.
 
@@ -131,6 +162,106 @@ By default, the script excludes "native" packages - these are build-time depende
 - Other build tools
 
 Use `--include-native` if you need a complete build-time dependency analysis.
+
+### File Component Filtering
+
+By default, the script excludes file-type components. These are individual files that:
+- Cannot be scanned for CVEs (no version information)
+- Significantly increase SBOM size without adding security value
+- Make vulnerability analysis slower in tools like DependencyTrack
+
+**Impact on typical Yocto build (e.g., 640 SPDX files):**
+- **With --include-files**: ~2,025 components (1,574 files + 451 packages)
+- **Without --include-files** (default): ~451 components (only libraries and applications)
+- **Size reduction**: ~77% smaller SBOM
+
+Use `--include-files` if you need complete file-level inventory for compliance purposes.
+
+### Source Component Filtering
+
+By default, the script excludes source components that lack version information. These are typically source archive references (e.g., `busybox-source-1`, `glibc-source-1`) that:
+- Cannot be scanned for CVEs (missing version information)
+- Cannot generate valid PURLs (PURL spec requires version)
+- Represent source archives rather than runtime components
+
+**Impact on typical Yocto build (e.g., 640 SPDX files):**
+- **With --include-source**: ~451 components (353 runtime + 98 source references)
+- **Without --include-source** (default): ~353 components (only components with versions)
+- **After deduplication**: ~293 unique components
+- **PURL coverage**: 100% of components can be scanned for vulnerabilities
+
+Use `--include-source` if you need source archive references for compliance tracking.
+
+## Package URL (PURL) Generation
+
+The script automatically generates [Package URLs (PURLs)](https://github.com/package-url/purl-spec) for all components with a name and version. PURLs are essential for vulnerability scanning in DependencyTrack and other security tools.
+
+### PURL Format
+
+The script intelligently generates PURLs based on package naming conventions:
+
+| Package Pattern | PURL Type | Example |
+|----------------|-----------|---------|
+| `python3-*`, `py-*` | `pkg:pypi/` | `pkg:pypi/requests@2.28.0` |
+| `node-*`, `npm-*` | `pkg:npm/` | `pkg:npm/express@4.18.0` |
+| `perl-*` | `pkg:cpan/` | `pkg:cpan/JSON@4.10` |
+| `ruby-*`, `gem-*` | `pkg:gem/` | `pkg:gem/rails@7.0.0` |
+| `go-*`, `golang-*` | `pkg:golang/` | `pkg:golang/gin@1.9.0` |
+| `rust-*`, `cargo-*` | `pkg:cargo/` | `pkg:cargo/serde@1.0.0` |
+| `php-*` | `pkg:composer/` | `pkg:composer/symfony@6.2.0` |
+| `maven-*`, `java-*` | `pkg:maven/` | `pkg:maven/spring-boot@3.0.0` |
+| `kernel-X.Y.Z-*` | `pkg:generic/linux@` | `pkg:generic/linux@6.6` |
+| All others (Yocto packages) | `pkg:generic/` | `pkg:generic/busybox@1.36.1` |
+
+### Why PURLs Matter
+
+**Yocto/OpenEmbedded SPDX files do not include CPE or PURL information by default.** This script solves that problem by:
+
+1. **Enabling Vulnerability Scanning**: DependencyTrack requires either CPE or PURL to match components against vulnerability databases (NVD, OSS Index, GitHub Advisories)
+2. **Supporting Multiple Analyzers**:
+   - **Internal Analyzer**: Uses PURLs to match against NVD, GitHub Advisories, OSV
+   - **OSS Index**: Requires PURLs for Sonatype's vulnerability database
+   - **Snyk**: Uses PURLs for commercial vulnerability scanning
+3. **Generic PURL Coverage**: For Yocto/OpenEmbedded packages without specific ecosystem types, `pkg:generic/` PURLs still enable basic matching
+4. **Linux Kernel Detection**: Automatically detects Yocto kernel packages (e.g., `kernel-6.6.101-dirty`) and generates proper Linux kernel PURLs (`pkg:generic/linux@6.6.101`) for accurate CVE matching
+
+**Without PURLs**, DependencyTrack cannot perform vulnerability analysis on your components.
+
+### Linux Kernel Special Handling
+
+Yocto/OpenEmbedded generates kernel packages with names like `kernel-6.6.101-dirty` and version `6.6`. The script automatically:
+- Detects kernel packages by name pattern (`kernel-X.Y.Z-*`)
+- Uses the component's version field for the PURL
+- Generates a Linux-specific PURL: `pkg:generic/linux@6.6`
+- Enables DependencyTrack to match against Linux kernel CVEs
+
+**Example transformation:**
+- **Yocto package**: `kernel-6.6.101-dirty` version `6.6`
+- **Generated PURL**: `pkg:generic/linux@6.6`
+- **Result**: Accurate CVE scanning for Linux kernel vulnerabilities
+
+## Automatic Cleanup
+
+The script automatically cleans up artifacts and duplicates created during the merge process:
+
+### Batch Merge Metadata Removal
+
+When merging large numbers of files (>50), the script processes files in batches. The CycloneDX merge tool creates metadata components for each batch (e.g., `yocto-image-core-batch-0`, `yocto-image-core-batch-1`, etc.). These are artifacts of the merge process and not actual software components, so they are automatically removed.
+
+**Example Impact:**
+- Batch metadata components removed: 12 (from 12 batches)
+
+### Deduplication
+
+The CycloneDX merge operation can create duplicate component entries when the same package appears in multiple SPDX files. The script automatically deduplicates components based on `name@version`, keeping only the first occurrence of each unique component.
+
+**Example Impact:**
+- Before deduplication: 353 components
+- After deduplication: 293 components
+- Duplicates removed: 60 components
+- After batch cleanup: 281 unique components
+
+This ensures that DependencyTrack doesn't need to perform its own deduplication during import, making the upload process cleaner and faster.
 
 ## Validation Fixes
 
