@@ -184,12 +184,6 @@ By default, the script excludes source components that lack version information.
 - Cannot generate valid PURLs (PURL spec requires version)
 - Represent source archives rather than runtime components
 
-**Impact on typical Yocto build (e.g., 640 SPDX files):**
-- **With --include-source**: ~451 components (353 runtime + 98 source references)
-- **Without --include-source** (default): ~353 components (only components with versions)
-- **After deduplication**: ~293 unique components
-- **PURL coverage**: 100% of components can be scanned for vulnerabilities
-
 Use `--include-source` if you need source archive references for compliance tracking.
 
 ## Package URL (PURL) Generation
@@ -254,12 +248,6 @@ When merging large numbers of files (>50), the script processes files in batches
 ### Deduplication
 
 The CycloneDX merge operation can create duplicate component entries when the same package appears in multiple SPDX files. The script automatically deduplicates components based on `name@version`, keeping only the first occurrence of each unique component.
-
-**Example Impact:**
-- Before deduplication: 353 components
-- After deduplication: 293 components
-- Duplicates removed: 60 components
-- After batch cleanup: 281 unique components
 
 This ensures that DependencyTrack doesn't need to perform its own deduplication during import, making the upload process cleaner and faster.
 
@@ -336,4 +324,4 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 
 ## Author
 
-Created for converting Yocto/OpenEmbedded SPDX outputs to CycloneDX format.
+Created by Vinnter AB, Sweden. www.vinnter.se
