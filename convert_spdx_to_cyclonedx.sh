@@ -463,7 +463,9 @@ if [ -f "$OUTPUT_FILE" ]; then
                 # Use CPE for system/OS components (better for CVE matching)
                 # Core OS components
                 elif (.name | test("^kernel-[0-9]|^linux-yocto")) then
-                    .cpe = "cpe:2.3:o:linux:linux_kernel:\(.version):*:*:*:*:*:*:*"
+                    # Extract full kernel version from name (e.g., kernel-6.6.101-dirty -> 6.6.101)
+                    (.name | capture("^kernel-(?<kver>[0-9]+\\.[0-9]+\\.[0-9]+)") | .kver) as $full_version |
+                    .cpe = "cpe:2.3:o:linux:linux_kernel:\($full_version):*:*:*:*:*:*:*"
                 elif (.name | test("^glibc")) then
                     .cpe = "cpe:2.3:a:gnu:glibc:\(.version):*:*:*:*:*:*:*"
                 elif (.name | test("^musl")) then
