@@ -435,19 +435,164 @@ if [ -f "$OUTPUT_FILE" ]; then
     fi
 fi
 
-# Generate PURLs for components that don't have them
+# Generate PURLs and CPEs for components that don't have them
 if [ -f "$OUTPUT_FILE" ]; then
-    echo -e "${YELLOW}Generating Package URLs (PURLs) for vulnerability scanning...${NC}"
+    echo -e "${YELLOW}Generating Package URLs (PURLs) and CPEs for vulnerability scanning...${NC}"
     TEMP_FILE="${OUTPUT_FILE}.tmp"
     
-    jq 'def generate_purl: if .purl != null and .purl != "" then . elif .name != null and .version != null and .version != "" then if (.name | test("^python3?-|^py-")) then .purl = "pkg:pypi/\(.name | sub("^python3?-"; "") | sub("^py-"; ""))@\(.version)" elif (.name | test("^node-|^npm-")) then .purl = "pkg:npm/\(.name | sub("^node-"; "") | sub("^npm-"; ""))@\(.version)" elif (.name | test("^perl-")) then .purl = "pkg:cpan/\(.name | sub("^perl-"; ""))@\(.version)" elif (.name | test("^ruby-|^gem-")) then .purl = "pkg:gem/\(.name | sub("^ruby-"; "") | sub("^gem-"; ""))@\(.version)" elif (.name | test("^go-|^golang-")) then .purl = "pkg:golang/\(.name | sub("^go-"; "") | sub("^golang-"; ""))@\(.version)" elif (.name | test("^rust-|^cargo-")) then .purl = "pkg:cargo/\(.name | sub("^rust-"; "") | sub("^cargo-"; ""))@\(.version)" elif (.name | test("^php-")) then .purl = "pkg:composer/\(.name | sub("^php-"; ""))@\(.version)" elif (.name | test("^maven-|^java-")) then .purl = "pkg:maven/\(.name | sub("^maven-"; "") | sub("^java-"; ""))@\(.version)" elif (.name | test("^kernel-[0-9]")) then .purl = "pkg:generic/linux@\(.version)" else .purl = "pkg:generic/\(.name)@\(.version)" end else . end; .components |= map(generate_purl)' "$OUTPUT_FILE" > "$TEMP_FILE"
+    jq 'def generate_identifiers:
+        if .name != null and .version != null and .version != "" then
+            if (.purl == null or .purl == "") then
+                # Map to specific package ecosystems (use PURL)
+                if (.name | test("^python3?-|^py-")) then
+                    .purl = "pkg:pypi/\(.name | sub("^python3?-"; "") | sub("^py-"; ""))@\(.version)"
+                elif (.name | test("^node-|^npm-")) then
+                    .purl = "pkg:npm/\(.name | sub("^node-"; "") | sub("^npm-"; ""))@\(.version)"
+                elif (.name | test("^perl-")) then
+                    .purl = "pkg:cpan/\(.name | sub("^perl-"; ""))@\(.version)"
+                elif (.name | test("^ruby-|^gem-")) then
+                    .purl = "pkg:gem/\(.name | sub("^ruby-"; "") | sub("^gem-"; ""))@\(.version)"
+                elif (.name | test("^go-|^golang-")) then
+                    .purl = "pkg:golang/\(.name | sub("^go-"; "") | sub("^golang-"; ""))@\(.version)"
+                elif (.name | test("^rust-|^cargo-")) then
+                    .purl = "pkg:cargo/\(.name | sub("^rust-"; "") | sub("^cargo-"; ""))@\(.version)"
+                elif (.name | test("^php-")) then
+                    .purl = "pkg:composer/\(.name | sub("^php-"; ""))@\(.version)"
+                elif (.name | test("^maven-|^java-")) then
+                    .purl = "pkg:maven/\(.name | sub("^maven-"; "") | sub("^java-"; ""))@\(.version)"
+                # Use CPE for system/OS components (better for CVE matching)
+                # Core OS components
+                elif (.name | test("^kernel-[0-9]|^linux-yocto")) then
+                    .cpe = "cpe:2.3:o:linux:linux_kernel:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^glibc")) then
+                    .cpe = "cpe:2.3:a:gnu:glibc:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^musl")) then
+                    .cpe = "cpe:2.3:a:musl-libc:musl:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^busybox")) then
+                    .cpe = "cpe:2.3:a:busybox:busybox:\(.version):*:*:*:*:*:*:*"
+                # Crypto/Security
+                elif (.name | test("^openssl")) then
+                    .cpe = "cpe:2.3:a:openssl:openssl:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^openssh")) then
+                    .cpe = "cpe:2.3:a:openbsd:openssh:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^libssl|^libcrypto")) then
+                    .cpe = "cpe:2.3:a:openssl:openssl:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^gnutls")) then
+                    .cpe = "cpe:2.3:a:gnu:gnutls:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^mbedtls")) then
+                    .cpe = "cpe:2.3:a:arm:mbed_tls:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^wolfssl")) then
+                    .cpe = "cpe:2.3:a:wolfssl:wolfssl:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^cryptsetup")) then
+                    .cpe = "cpe:2.3:a:cryptsetup_project:cryptsetup:\(.version):*:*:*:*:*:*:*"
+                # System utilities
+                elif (.name | test("^systemd")) then
+                    .cpe = "cpe:2.3:a:systemd_project:systemd:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^dbus")) then
+                    .cpe = "cpe:2.3:a:freedesktop:dbus:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^util-linux")) then
+                    .cpe = "cpe:2.3:a:kernel:util-linux:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^eudev|^udev")) then
+                    .cpe = "cpe:2.3:a:udev_project:udev:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^procps")) then
+                    .cpe = "cpe:2.3:a:procps_project:procps:\(.version):*:*:*:*:*:*:*"
+                # Compression libraries
+                elif (.name | test("^zlib")) then
+                    .cpe = "cpe:2.3:a:zlib:zlib:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^xz")) then
+                    .cpe = "cpe:2.3:a:tukaani:xz:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^bzip2")) then
+                    .cpe = "cpe:2.3:a:bzip:bzip2:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^lz4")) then
+                    .cpe = "cpe:2.3:a:lz4_project:lz4:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^zstd")) then
+                    .cpe = "cpe:2.3:a:facebook:zstandard:\(.version):*:*:*:*:*:*:*"
+                # Core libraries
+                elif (.name | test("^libxml2")) then
+                    .cpe = "cpe:2.3:a:xmlsoft:libxml2:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^libxslt")) then
+                    .cpe = "cpe:2.3:a:xmlsoft:libxslt:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^expat")) then
+                    .cpe = "cpe:2.3:a:libexpat_project:libexpat:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^pcre")) then
+                    .cpe = "cpe:2.3:a:pcre:pcre:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^sqlite")) then
+                    .cpe = "cpe:2.3:a:sqlite:sqlite:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^curl")) then
+                    .cpe = "cpe:2.3:a:haxx:curl:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^libcurl")) then
+                    .cpe = "cpe:2.3:a:haxx:libcurl:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^ncurses")) then
+                    .cpe = "cpe:2.3:a:gnu:ncurses:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^readline")) then
+                    .cpe = "cpe:2.3:a:gnu:readline:\(.version):*:*:*:*:*:*:*"
+                # Networking
+                elif (.name | test("^dropbear")) then
+                    .cpe = "cpe:2.3:a:matt_johnston:dropbear_ssh_server:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^bind")) then
+                    .cpe = "cpe:2.3:a:isc:bind:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^iproute2")) then
+                    .cpe = "cpe:2.3:a:iproute2_project:iproute2:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^iptables")) then
+                    .cpe = "cpe:2.3:a:netfilter:iptables:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^avahi")) then
+                    .cpe = "cpe:2.3:a:avahi:avahi:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^dhcp")) then
+                    .cpe = "cpe:2.3:a:isc:dhcp:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^ntp")) then
+                    .cpe = "cpe:2.3:a:ntp:ntp:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^chrony")) then
+                    .cpe = "cpe:2.3:a:tuxfamily:chrony:\(.version):*:*:*:*:*:*:*"
+                # Web/HTTP
+                elif (.name | test("^nginx")) then
+                    .cpe = "cpe:2.3:a:nginx:nginx:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^lighttpd")) then
+                    .cpe = "cpe:2.3:a:lighttpd:lighttpd:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^apache|^httpd")) then
+                    .cpe = "cpe:2.3:a:apache:http_server:\(.version):*:*:*:*:*:*:*"
+                # Filesystems & Storage
+                elif (.name | test("^e2fsprogs")) then
+                    .cpe = "cpe:2.3:a:e2fsprogs_project:e2fsprogs:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^lvm2")) then
+                    .cpe = "cpe:2.3:a:heinz_mauelshagen:lvm2:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^mtd-utils")) then
+                    .cpe = "cpe:2.3:a:mtd-utils_project:mtd-utils:\(.version):*:*:*:*:*:*:*"
+                # Bootloaders
+                elif (.name | test("^u-boot")) then
+                    .cpe = "cpe:2.3:a:denx:u-boot:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^grub")) then
+                    .cpe = "cpe:2.3:a:gnu:grub:\(.version):*:*:*:*:*:*:*"
+                # Scripting/Languages (runtime)
+                elif (.name | test("^bash")) then
+                    .cpe = "cpe:2.3:a:gnu:bash:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^coreutils")) then
+                    .cpe = "cpe:2.3:a:gnu:coreutils:\(.version):*:*:*:*:*:*:*"
+                # Multimedia
+                elif (.name | test("^ffmpeg")) then
+                    .cpe = "cpe:2.3:a:ffmpeg:ffmpeg:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^gstreamer")) then
+                    .cpe = "cpe:2.3:a:gstreamer_project:gstreamer:\(.version):*:*:*:*:*:*:*"
+                elif (.name | test("^alsa-lib")) then
+                    .cpe = "cpe:2.3:a:alsa-project:alsa-lib:\(.version):*:*:*:*:*:*:*"
+                # Fallback to CPE for generic/unknown packages (better than pkg:generic)
+                else
+                    .cpe = "cpe:2.3:a:*:\(.name):\(.version):*:*:*:*:*:*:*"
+                end
+            else
+                .
+            end
+        else
+            .
+        end;
+        .components |= map(generate_identifiers)' "$OUTPUT_FILE" > "$TEMP_FILE"
     
     mv "$TEMP_FILE" "$OUTPUT_FILE"
     
-    # Count how many PURLs were generated
+    # Count how many PURLs and CPEs were generated
     PURL_COUNT=$(jq '[.components[] | select(.purl != null)] | length' "$OUTPUT_FILE")
+    CPE_COUNT=$(jq '[.components[] | select(.cpe != null)] | length' "$OUTPUT_FILE")
     TOTAL_COUNT=$(jq '.components | length' "$OUTPUT_FILE")
-    echo -e "${GREEN}✓ Generated PURLs for $PURL_COUNT/$TOTAL_COUNT components${NC}"
+    echo -e "${GREEN}✓ Generated PURLs for $PURL_COUNT/$TOTAL_COUNT components and CPEs for $CPE_COUNT components${NC}"
 fi
 
 # Show file size and component count
