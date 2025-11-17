@@ -21,6 +21,7 @@ set -e
 INCLUDE_NATIVE=false
 INCLUDE_FILES=false
 INCLUDE_SOURCE=false
+INCLUDE_DUPLICATES=false
 POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -37,19 +38,25 @@ while [[ $# -gt 0 ]]; do
             INCLUDE_SOURCE=true
             shift
             ;;
+        --include-duplicates)
+            INCLUDE_DUPLICATES=true
+            shift
+            ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS] [spdx_directory] [output_file]"
             echo ""
             echo "Convert SPDX JSON files to a single CycloneDX SBOM"
             echo ""
             echo "Options:"
-            echo "  --include-native    Include native packages (build-time only)"
-            echo "                      Default: native packages are excluded"
-            echo "  --include-files     Include file-type components"
-            echo "                      Default: file components are excluded (CVE scanning not applicable)"
-            echo "  --include-source    Include source components without version"
-            echo "                      Default: source components are excluded (cannot be scanned for CVEs)"
-            echo "  -h, --help          Show this help message"
+            echo "  --include-native       Include native packages (build-time only)"
+            echo "                         Default: native packages are excluded"
+            echo "  --include-files        Include file-type components"
+            echo "                         Default: file components are excluded (CVE scanning not applicable)"
+            echo "  --include-source       Include source components without version"
+            echo "                         Default: source components are excluded (cannot be scanned for CVEs)"
+            echo "  --include-duplicates   Keep duplicate CPE entries (sub-packages)"
+            echo "                         Default: duplicates are removed, names aggregated (prevents duplicate CVE reports)"
+            echo "  -h, --help             Show this help message"
             echo ""
             echo "Arguments:"
             echo "  spdx_directory      Directory containing SPDX JSON files (required)"
@@ -59,9 +66,10 @@ while [[ $# -gt 0 ]]; do
             echo "Examples:"
             echo "  $0 ./spdx_dir output.json"
             echo "  $0 --include-native ./spdx_dir output.json"
+            echo "  $0 --include-duplicates ./spdx_dir output.json"
             echo "  $0 --include-files ./spdx_dir output.json"
             echo "  $0 --include-source ./spdx_dir output.json"
-            echo "  $0 --include-native --include-files --include-source ./spdx_dir output.json"
+            echo "  $0 --include-native --include-duplicates --include-files ./spdx_dir output.json"
             exit 0
             ;;
         *)
@@ -101,6 +109,7 @@ echo "Output File: $OUTPUT_FILE"
 echo "Include Native Packages: $INCLUDE_NATIVE"
 echo "Include File Components: $INCLUDE_FILES"
 echo "Include Source Components: $INCLUDE_SOURCE"
+echo "Include Duplicate CPEs: $INCLUDE_DUPLICATES"
 echo "Temporary Directory: $TEMP_DIR"
 echo ""
 
@@ -595,6 +604,51 @@ if [ -f "$OUTPUT_FILE" ]; then
     CPE_COUNT=$(jq '[.components[] | select(.cpe != null)] | length' "$OUTPUT_FILE")
     TOTAL_COUNT=$(jq '.components | length' "$OUTPUT_FILE")
     echo -e "${GREEN}✓ Generated PURLs for $PURL_COUNT/$TOTAL_COUNT components and CPEs for $CPE_COUNT components${NC}"
+fi
+
+# Remove duplicate CPE entries, keeping the component with the shortest name
+if [ -f "$OUTPUT_FILE" ] && [ "$INCLUDE_DUPLICATES" = false ]; then
+    echo -e "${YELLOW}Removing duplicate CPE entries (keeping shortest package name)...${NC}"
+    TEMP_FILE="${OUTPUT_FILE}.tmp"
+    
+    # Count components before deduplication
+    BEFORE_COUNT=$(jq '.components | length' "$OUTPUT_FILE")
+    
+    # Group by CPE, keep component with shortest name, append other names in parentheses
+    jq '.components |= (
+        # Group components by CPE (handle null CPEs separately)
+        group_by(.cpe // "null-cpe-\(. | tostring)") | 
+        map(
+            if length > 1 and .[0].cpe != null then
+                # Multiple components with same CPE
+                # Sort by name length and extract the shortest as base
+                (sort_by(.name | length) | .[0]) as $shortest |
+                # Get all other names (excluding the shortest)
+                ([sort_by(.name | length)[1:] | .[].name] | join(", ")) as $others |
+                # Update the name to include filtered packages
+                $shortest | 
+                if $others != "" then
+                    .name = "\(.name) (\($others))"
+                else
+                    .
+                end
+            else
+                # Single component or null CPE - keep as is
+                .[0]
+            end
+        )
+    )' "$OUTPUT_FILE" > "$TEMP_FILE"
+    
+    mv "$TEMP_FILE" "$OUTPUT_FILE"
+    
+    AFTER_COUNT=$(jq '.components | length' "$OUTPUT_FILE")
+    REMOVED_COUNT=$((BEFORE_COUNT - AFTER_COUNT))
+    
+    if [ "$REMOVED_COUNT" -gt 0 ]; then
+        echo -e "${GREEN}✓ Removed $REMOVED_COUNT duplicate CPE entries (sub-packages, names aggregated)${NC}"
+    else
+        echo -e "${GREEN}✓ No duplicate CPE entries found${NC}"
+    fi
 fi
 
 # Show file size and component count

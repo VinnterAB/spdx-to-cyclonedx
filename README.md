@@ -11,8 +11,12 @@ A bash script to convert SPDX JSON files to CycloneDX format and merge them into
   - Exclude native packages (build-time only) by default
   - Filter file-type components (not CVE-scannable) by default
   - Filter source components without version (not CVE-scannable) by default
+  - Remove duplicate CPE entries (sub-packages) by default - prevents duplicate CVE reports
+- **Vulnerability Scanning Ready**:
+  - Automatically generate CPEs (Common Platform Enumeration) for system components
+  - Automatically generate PURLs (Package URLs) for ecosystem packages
+  - Smart duplicate removal keeps one entry per software with aggregated package names
 - **Validation Fixes**: Automatically fix common validation issues for DependencyTrack compatibility
-- **PURL Generation**: Automatically generate Package URLs for vulnerability scanning
 - **Progress Tracking**: Clear progress indicators during conversion and merging## Requirements
 
 - **cyclonedx-cli** - CycloneDX CLI tool
@@ -63,6 +67,11 @@ brew install jq
   - Default: source components without version are excluded
   - Source components (typically named `*-source-*`) without version information cannot be scanned for CVEs
 
+- `--include-duplicates`: Keep duplicate CPE entries (sub-packages)
+  - Default: duplicate CPEs are removed, names aggregated (prevents duplicate CVE reports)
+  - Yocto/OpenEmbedded splits packages (e.g., openssh → openssh, openssh-sshd, openssh-ssh)
+  - By default, keeps shortest name and appends others: `openssh (openssh-sshd, openssh-ssh, ...)`
+
 - `-h, --help`: Display help message with usage information
 
 ### Examples
@@ -87,14 +96,14 @@ brew install jq
 ./convert_spdx_to_cyclonedx.sh --include-source ./my-spdx-files output.json
 ```
 
-**Include everything (native packages, files, and source components):**
+**Keep duplicate sub-packages (e.g., openssh-sshd, openssh-ssh separately):**
 ```bash
-./convert_spdx_to_cyclonedx.sh --include-native --include-files --include-source ./my-spdx-files output.json
+./convert_spdx_to_cyclonedx.sh --include-duplicates ./my-spdx-files output.json
 ```
 
-**Use default directory and output file:**
+**Include everything (native packages, files, source components, and duplicates):**
 ```bash
-./convert_spdx_to_cyclonedx.sh
+./convert_spdx_to_cyclonedx.sh --include-native --include-files --include-source --include-duplicates ./my-spdx-files output.json
 ```
 
 ## Output
@@ -137,11 +146,23 @@ Merging 554 CycloneDX files...
 Cleaning up temporary files...
 Fixing validation issues...
 ✓ Validation issues fixed
+Filtering file-type components...
+✓ Excluded 1574 file-type components
+Filtering source components without versions...
+✓ Excluded 98 source components without version
+Removing batch merge metadata components...
+✓ Removed 12 batch merge metadata components
+Removing duplicate components...
+✓ Removed 60 duplicate components
+Generating Package URLs (PURLs) and CPEs for vulnerability scanning...
+✓ Generated PURLs for 1/281 components and CPEs for 280 components
+Removing duplicate CPE entries (keeping shortest package name)...
+✓ Removed 41 duplicate CPE entries (sub-packages, names aggregated)
 
 === Summary ===
 Output File: output.json
-File Size: 1.8M
-Components: 1847
+File Size: 264K
+Components: 240
 
 Validating SBOM...
 ✓ SBOM is valid!
@@ -186,9 +207,26 @@ By default, the script excludes source components that lack version information.
 
 Use `--include-source` if you need source archive references for compliance tracking.
 
-## Package URL (PURL) Generation
+## Vulnerability Identifiers: CPE and PURL Generation
 
-The script automatically generates [Package URLs (PURLs)](https://github.com/package-url/purl-spec) for all components with a name and version. PURLs are essential for vulnerability scanning in DependencyTrack and other security tools.
+The script automatically generates vulnerability identifiers for all components to enable accurate CVE scanning.
+
+### CPE (Common Platform Enumeration)
+
+CPEs are generated for **system and OS-level components** where CVE databases have better coverage:
+
+| Component Type | CPE Format | Example |
+|----------------|------------|---------|
+| Linux Kernel | `cpe:2.3:o:linux:linux_kernel:` | `cpe:2.3:o:linux:linux_kernel:6.6.101:*:*:*:*:*:*:*` |
+| OpenSSL | `cpe:2.3:a:openssl:openssl:` | `cpe:2.3:a:openssl:openssl:3.2.4:*:*:*:*:*:*:*` |
+| OpenSSH | `cpe:2.3:a:openbsd:openssh:` | `cpe:2.3:a:openbsd:openssh:9.6p1:*:*:*:*:*:*:*` |
+| BusyBox | `cpe:2.3:a:busybox:busybox:` | `cpe:2.3:a:busybox:busybox:1.36.1:*:*:*:*:*:*:*` |
+| glibc | `cpe:2.3:a:gnu:glibc:` | `cpe:2.3:a:gnu:glibc:2.39:*:*:*:*:*:*:*` |
+| systemd, dbus, etc. | Various CPE formats | 50+ system components supported |
+
+### PURL (Package URL)
+
+The script automatically generates [Package URLs (PURLs)](https://github.com/package-url/purl-spec) for **ecosystem packages** (Python, npm, etc.). PURLs are essential for vulnerability scanning in DependencyTrack and other security tools.
 
 ### PURL Format
 
@@ -249,7 +287,18 @@ When merging large numbers of files (>50), the script processes files in batches
 
 The CycloneDX merge operation can create duplicate component entries when the same package appears in multiple SPDX files. The script automatically deduplicates components based on `name@version`, keeping only the first occurrence of each unique component.
 
-This ensures that DependencyTrack doesn't need to perform its own deduplication during import, making the upload process cleaner and faster.
+### Sub-Package Aggregation (CPE Duplicate Removal)
+
+**Yocto/OpenEmbedded splits packages into sub-packages** (e.g., `openssh` → `openssh`, `openssh-sshd`, `openssh-ssh`, `openssh-keygen`, etc.). All sub-packages from the same source have **identical CPEs**, causing duplicate CVE reports.
+
+**By default**, the script removes CPE duplicates and aggregates names:
+- **Before**: 6 openssh components (openssh, openssh-sshd, openssh-ssh, openssh-keygen, openssh-scp, openssh-sftp-server)
+- **After**: `openssh (openssh-sshd, openssh-ssh, openssh-keygen, openssh-scp, openssh-sftp-server)`
+- **Benefits**: Clean vulnerability reports, no duplicate CVEs, full transparency about what was filtered
+
+**Typical reduction**: 281 components → 240 components (41 duplicates removed)
+
+Use `--include-duplicates` to keep all sub-packages as separate entries (may cause duplicate CVE reports).
 
 ## Validation Fixes
 
