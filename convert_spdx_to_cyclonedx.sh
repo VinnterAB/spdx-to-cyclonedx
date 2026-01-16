@@ -663,7 +663,7 @@ if [ -f "$OUTPUT_FILE" ]; then
     echo "Components: $COMPONENT_COUNT"
     
     # Show component type breakdown
-    TYPE_BREAKDOWN=$(jq -r '.components | group_by(.type) | map("\(.type // "unknown"): \(length)") | join(", ")' "$OUTPUT_FILE" 2>/dev/null)
+    TYPE_BREAKDOWN=$(jq -r '.components | group_by(.type) | map("\(.[0].type // "unknown"): \(length)") | join(", ")' "$OUTPUT_FILE" 2>/dev/null)
     if [ -n "$TYPE_BREAKDOWN" ]; then
         echo "Component Types: $TYPE_BREAKDOWN"
     fi
